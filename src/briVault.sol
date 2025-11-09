@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.24;
+// @audit-info using floating pragma
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -14,6 +15,7 @@ contract BriVault is ERC4626, Ownable {
 
     using SafeERC20 for IERC20;
     
+    // @audit-info should be immutable
     uint256 public participationFeeBsp;
 
     uint256 constant BASE = 10000;
@@ -21,14 +23,19 @@ contract BriVault is ERC4626, Ownable {
     /**
     @dev participationFee address
      */
+    // @audit-info should be immutable
     address private participationFeeAddress;
 
+    // @audit-info should be immutable
     uint256 public eventStartDate;
 
+    // @audit-info should be immutable
     uint256 public eventEndDate;
 
+    // @audit-info stakedAmount not used
     uint256 public  stakedAmount;
 
+    // @audit-info totalAssetsShares not used
     uint256 public totalAssetsShares;
 
     string public winner;
@@ -39,12 +46,14 @@ contract BriVault is ERC4626, Ownable {
 
     uint256 public totalParticipantShares;
 
+    // @audit-info looks like a private but actually public.
     bool public _setWinner;
 
     uint256 public winnerCountryId;
 
 
     // minimum amount to join in.
+    // @audit-info should be immutable
     uint256 public  minimumAmount; 
 
     // number of participants 
@@ -82,6 +91,10 @@ contract BriVault is ERC4626, Ownable {
          if (_participationFeeBsp > PARTICIPATIONFEEBSPMAX){
             revert limiteExceede();
          }
+         // @audit should check _eventEndDate > _eventStartDate
+         // @audit should check _eventStartDate > block.timestamp, otherwise event already started, no one can join
+         // @audit should check _participationFeeAddress not zero address
+         // @audit should check if _minimumAmount is too high so no one can join or even overflow
          
          participationFeeBsp = _participationFeeBsp;
          eventStartDate = _eventStartDate;
@@ -104,6 +117,12 @@ contract BriVault is ERC4626, Ownable {
         @notice sets the countries for the tournament
      */
  function setCountry(string[48] memory countries) public onlyOwner {
+
+    // q: what if some 0s in the array?
+    // q: should we check if countries have already been set?
+    // @audit-info this function can be called multiple times to overwrite previous countries
+    // @audit what if some countries are empty strings?
+
     for (uint256 i = 0; i < countries.length; ++i) {
         teams[i] = countries[i];
     }
@@ -124,6 +143,7 @@ contract BriVault is ERC4626, Ownable {
             revert WinnerAlreadySet();
         }
 
+        // @audit no check for non-empty country name
         winnerCountryId = countryIndex;
         winner = teams[countryIndex];
 
@@ -143,6 +163,7 @@ contract BriVault is ERC4626, Ownable {
      * @notice sets the finalized vault balance
      */
     function _setFinallizedVaultBalance () internal returns (uint256) {
+        // @audit-info no need to check since setWinner can only be called after eventEndDate
         if (block.timestamp <= eventStartDate) {
             revert eventNotStarted();
         }
@@ -156,12 +177,14 @@ contract BriVault is ERC4626, Ownable {
     function _convertToShares(uint256 assets) internal view returns (uint256 shares) {
         uint256 balanceOfVault = IERC20(asset()).balanceOf(address(this));
         uint256 totalShares = totalSupply(); // total minted BTT shares so far
-
+        
+        // q: What if balanceOfVault is 0 but totalShares is not 0?
         if (totalShares == 0 || balanceOfVault == 0) {
             // First depositor: 1:1 ratio
             return assets;
         }
 
+        // q: how to deal with rounding errors?
         shares = Math.mulDiv(assets, totalShares, balanceOfVault);
     }
 
@@ -177,6 +200,7 @@ contract BriVault is ERC4626, Ownable {
     /**
         @notice get country 
      */
+    // @audit-info getCountry not used anywhere
     function getCountry(uint256 countryId) external view returns (string memory) {
          if (bytes(teams[countryId]).length == 0) {
             revert invalidCountry();
@@ -189,7 +213,7 @@ contract BriVault is ERC4626, Ownable {
         @notice get winnerShares
      */
     function _getWinnerShares () internal returns (uint256) {
-
+        // @audit no reset. owner can call setWinner multiple times to multiply totalWinnerShares so that prize will be diluted.
         for (uint256 i = 0; i < usersAddress.length; ++i){
             address user = usersAddress[i]; 
            totalWinnerShares += userSharesToCountry[user][winnerCountryId];
@@ -205,6 +229,8 @@ contract BriVault is ERC4626, Ownable {
         @dev allows users to deposit for the event.
      */
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
+
+        // @audit Attackers can deposit on behalf of receiver without their consent, and keep shares for themselves. 
         require(receiver != address(0));
 
         if (block.timestamp >= eventStartDate) {
@@ -213,12 +239,14 @@ contract BriVault is ERC4626, Ownable {
 
         uint256 fee = _getParticipationFee(assets);
         // charge on a percentage basis points
+
         if (minimumAmount + fee > assets) {
             revert lowFeeAndAmount();
         }
 
         uint256 stakeAsset = assets - fee;
 
+        // @audit no increment staking for existing user. User can lose fund!
         stakedAsset[receiver] = stakeAsset;
 
         uint256 participantShares = _convertToShares(stakeAsset);
@@ -240,6 +268,10 @@ contract BriVault is ERC4626, Ownable {
         @dev allows users to join the event 
     */
     function joinEvent(uint256 countryId) public {
+
+        // @audit single attacker can join multiple times to manipulate numberOfParticipants and userSharesToCountry
+        // @audit no upbound check for numberOfParticipants, attacker can overflow it (DoS)
+        // @audit no check for duplicate players.
         if (stakedAsset[msg.sender] == 0) {
             revert noDeposit();
         }
@@ -273,11 +305,18 @@ contract BriVault is ERC4626, Ownable {
         @dev cancel participation
      */
     function cancelParticipation () public  {
+        // q: should we check if the user has joined the event?
         if (block.timestamp >= eventStartDate){
            revert eventStarted();
         }
 
         uint256 refundAmount = stakedAsset[msg.sender];
+        // check staked amount is 0 or not
+        // q: do not reset userToCountry mapping?
+        // q: do not reset userSharesToCountry mapping?
+        // q: do not remove from usersAddress array?
+        // q: do not decrease numberOfParticipants or totalParticipantShares?
+        // @audit Do not reset these variables. Attacker can exploit this (DoS)
 
         stakedAsset[msg.sender] = 0;
 
@@ -286,6 +325,7 @@ contract BriVault is ERC4626, Ownable {
         _burn(msg.sender, shares);
 
         IERC20(asset()).safeTransfer(msg.sender, refundAmount);
+        // @audit-info Missing emit event
     }
 
         /**
@@ -296,15 +336,18 @@ contract BriVault is ERC4626, Ownable {
             revert eventNotEnded();
         }
 
+        // @audit should check countryId instead of country name.
         if (
             keccak256(abi.encodePacked(userToCountry[msg.sender])) !=
             keccak256(abi.encodePacked(winner))
         ) {
             revert didNotWin();
         }
+        // @audit no check if winner is an empty string. Attacker can set empty string as country and win. Attackers can even directly go withdraw if eventEndDate has passed but winner not set yet.
         uint256 shares = balanceOf(msg.sender);
 
         uint256 vaultAsset = finalizedVaultAsset;
+        // q: what if totalWinnerShares is 0?
         uint256 assetToWithdraw = Math.mulDiv(shares, vaultAsset, totalWinnerShares);
         
         _burn(msg.sender, shares);
