@@ -246,7 +246,7 @@ contract BriVault is ERC4626, Ownable {
 
         uint256 stakeAsset = assets - fee;
 
-        // @audit no increment staking for existing user. User can lose fund!
+        // @audit no increment staking for existing user. 
         stakedAsset[receiver] = stakeAsset;
 
         uint256 participantShares = _convertToShares(stakeAsset);
@@ -272,6 +272,7 @@ contract BriVault is ERC4626, Ownable {
         // @audit single attacker can join multiple times to manipulate numberOfParticipants and userSharesToCountry
         // @audit no upbound check for numberOfParticipants, attacker can overflow it (DoS)
         // @audit no check for duplicate players.
+
         if (stakedAsset[msg.sender] == 0) {
             revert noDeposit();
         }
@@ -344,10 +345,11 @@ contract BriVault is ERC4626, Ownable {
             revert didNotWin();
         }
         // @audit no check if winner is an empty string. Attacker can set empty string as country and win. Attackers can even directly go withdraw if eventEndDate has passed but winner not set yet.
+        // @audit attacker can aggregate shares from losers and increase their winning share.
         uint256 shares = balanceOf(msg.sender);
 
         uint256 vaultAsset = finalizedVaultAsset;
-        // q: what if totalWinnerShares is 0?
+        // @audit no check if totalWinnerShares is zero, division by zero possible
         uint256 assetToWithdraw = Math.mulDiv(shares, vaultAsset, totalWinnerShares);
         
         _burn(msg.sender, shares);
